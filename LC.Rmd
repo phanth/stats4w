@@ -1,0 +1,92 @@
+---
+title: "Lending’s Club Data"
+author: "Hoa Thuong Luu Phan (Carol Phan)"
+date: "2/5/2019"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r}
+loan <- read.csv("/Users/carolphan/Desktop/STATS 4W03/lending-club-loan-data/loan.csv")
+#install.packages("RSQLite")
+library("RSQLite")
+library("dplyr")
+library("ggplot2")
+
+#connect to SQLite
+dataframe = "/Users/carolphan/Desktop/STATS 4W03/lending-club-loan-data/database.sqlite"
+loan.sqlite = dbConnect(SQLite(),dbname=dataframe)
+#get a list of all tables 
+tables = dbListTables(loan.sqlite)
+#count the number of observations in the SQLite table
+pop = dbGetQuery(loan.sqlite,'select count(*) from loan') 
+#get the 'loan' table as a dataframe
+loan.sql = dbGetQuery(loan.sqlite,'select * from loan') 
+str(loan.sql)
+names(loan.sql)
+head(loan.sql,5)
+t(filter(loan.sql,id==1077501))
+#Notice that loan.sql includes index 
+
+pop=dbGetQuery(loan.sqlite,'select count(distinct(id)) from loan')
+dbGetQuery(loan.sqlite,'select count(distinct(member_id)) from loan')
+
+loan_status = dbGetQuery(loan.sqlite,'select loan_status, count(*), sum(loan_amnt)/(1000*count(*)) from loan GROUP BY loan_status')
+state = dbGetQuery(loan.sqlite,'select addr_state, count(*), sum(loan_amnt)/(1000*count(*)) from loan GROUP BY addr_state')
+purpose = dbGetQuery(loan.sqlite,'select purpose, count(purpose) from loan GROUP BY purpose')
+dq = dbGetQuery(loan.sqlite,'select delinq_2yrs, count(id) from loan GROUP BY delinq_2yrs')
+cur_dq = dbGetQuery(loan.sqlite,'select count(*) from loan where acc_now_delinq == 1')
+terms = dbGetQuery(loan.sqlite,'select term, count(id) from loan GROUP BY term')
+dq1 = dbGetQuery(loan.sqlite,'select mths_since_last_delinq, count(*) from loan GROUP BY mths_since_last_delinq')
+
+#plots/tables
+ggplot(data=loan_status[-1,],aes(loan_status,`sum(loan_amnt)/(1000*count(*))`,size=`count(*)`))+geom_point(colour="blue")+theme(axis.text.x = element_text(angle=90,hjust=1))+labs(y='Average Loan Amount in Thousand',title='Loan Status',size='# of Accounts')
+
+ggplot(data=state[-1,],aes(addr_state,`sum(loan_amnt)/(1000*count(*))`,size=`count(*)`))+geom_point(colour="red")+theme(axis.text.x = element_text(angle=90,hjust=1))+labs(y='Average Loan Amount in Thousand',title='USA',size='# of Accounts',x='States')
+purpose 
+terms
+
+#drop the first column and set to loan
+loan = loan.sql[,-1]
+#make the results reproducible
+set.seed(1)
+#set the training set
+train = sample(887383,443690)
+#set the test set
+test = (-train) 
+#split the loan data based on the training set
+loantrain = loan[train,]
+#splot the loan data based in the test set 
+loantest = loan[test,]
+
+#View(loantrain)
+#make the results reproducible
+set.seed(1)
+#fit the linear model
+#get the summary of the linear model 
+#the test error of linear model using least square 
+#problem: cannot lm 75 variables 
+
+#get the y from training set
+y = loantrain$delinq_2yrs
+#get a matrix of training set
+x = model.matrix(delinq_2yrs~.,data=loantrain)
+
+#Principal Component Analysis (PCA)
+#pca = pcromp(,scale=FALSE)
+#nlevels(loantrain$recoveries)
+
+
+```
+Next step...
+- Find revelant predictors by the Principal Component Analysis (PCA)
+- Generate MSE plot on cross-validation from sample() function
+- Get model.matrix() to work to get a matrix of training set 
+          - Get the grid paramter for lambda
+          - create the model for lasso model
+
+
+
+
+
