@@ -1,0 +1,146 @@
+---
+title: "LCExplore"
+author: "Hoa Thuong Luu Phan (Carol Phan)"
+date: "2/6/2019"
+output: html_document
+---
+Downloading the data from SQLite:
+
+```{r}
+#install.packages("RSQLite")
+library("RSQLite")
+#connect to SQLite
+#dataframe = "/Users/carolphan/Desktop/STATS 4W03/lending-club-loan-data/database.sqlite"
+loan.sqlite = dbConnect(SQLite(),dbname=dataframe)
+```
+
+Exploring the data:
+
+```{r}
+#count the number of observations in the SQLite table
+dbGetQuery(loan.sqlite,'select count(*) from loan') 
+#get the 'loan' table as a dataframe
+#notice that loan.sql includes index 
+loan.sql = dbGetQuery(loan.sqlite,'select * from loan') 
+#list of variables 
+names(loan.sql)
+#structure of the data
+str(loan.sql)
+#examples
+head(loan.sql,5)
+#t(filter(loan.sql,id==1077501))
+
+loan.sql[is.na(loan.sql)]<- 999999999
+```
+
+Generate summaries of the data:
+
+```{r}
+library("dplyr")
+library("ggplot2")
+#looking at total loan amounts (in thousand) and return on investment per loan_status
+loan_status = dbGetQuery(loan.sqlite,'select loan_status, count(*), sum(loan_amnt)/count(*), sum((total_pymnt/funded_amnt) * 100)/count(*) from loan GROUP BY loan_status')
+loan_status=loan_status[-1,]
+loan_status
+
+ggplot(data=loan_status,aes(loan_status,`sum(loan_amnt)/count(*)`,size=`count(*)`))+geom_point(colour="blue")+theme(axis.text.x = element_text(angle=40,hjust=1))+labs(x='Status of the Loan',y='Average Loan Issued ($)',title='Average Loan Issued Grouped by Status',size='# of Accounts')
+
+ggplot(data=loan_status,aes(loan_status,`sum((total_pymnt/funded_amnt) * 100)/count(*)`,size=`sum(loan_amnt)/count(*)`))+geom_point(colour="red")+theme(axis.text.x = element_text(angle=40,hjust=1))+labs(x='Status of the Loan',y='Average ROI (%)',title='Average ROI (%) Grouped by Status',size='Average Loan Issued ($)')
+
+```
+
+Next, we look at the loan issued across the USA:
+
+```{r}
+state = dbGetQuery(loan.sqlite,'select addr_state,count(*), sum(loan_amnt)/count(*) from loan GROUP BY addr_state')
+state=state[-1,]
+state
+ggplot(data=state,aes(addr_state,`sum(loan_amnt)/count(*)`,size=`count(*)`))+geom_point(colour="purple")+theme(axis.text.x = element_text(angle=90,hjust=1))+labs(x='Provinces of USA',y='Average Loan Issued ($)',title='Average Loan Issued across USA',size='# of Accounts')
+```
+
+We are going to quickly look at:
+
+```{r}
+terms = dbGetQuery(loan.sqlite,'select loan_status,term,count(*),sum(int_rate)/count(*) from loan GROUP BY loan_status,term')
+
+purpose = dbGetQuery(loan.sqlite,'select purpose, count(*) from loan GROUP BY purpose')
+
+owner = dbGetQuery(loan.sqlite,'select home_ownership, count(*) from loan GROUP BY home_ownership')
+
+empl = dbGetQuery(loan.sqlite,'select emp_length, count(*) from loan GROUP BY emp_length')
+
+empt = dbGetQuery(loan.sqlite,'select emp_title, count(*) from loan GROUP BY emp_title')
+
+#quantile buckets
+#loan.current = filter(loan.sql,loan_status=='Current')
+#bin = quantile(loan.current$annual_inc, seq(0,1,0.1))
+#lab = c(0, prettyNum(bin[2:10], big.mark = ","), "+inf")
+#lab = paste(lab[1:10], lab[2:11], sep = "-")
+#loan.current = mutate(loan.current, annual_inc_bin = #cut(loan.current$annual_inc, breaks = bin, labels = factor(lab), include.lowest=TRUE))
+
+#head(loan.current,5)
+
+terms
+purpose
+owner
+empl
+empt
+
+```
+
+We are going to avoid data-snooping around deliquency related variables 
+
+Generate training set and test set:
+
+```{r}
+#drop the first column and set to loan
+loan = loan.sql[,-1]
+#make the results reproducible
+set.seed(1)
+#set the training set
+train = sample(887383,443690)
+#set the test set
+test = (-train) 
+#split the loan data based on the training set
+loantrain = loan[train,]
+#splot the loan data based in the test set 
+loantest = loan[test,]
+
+#View(loantrain)
+#make the results reproducible
+set.seed(1)
+#fit the linear model
+#get the summary of the linear model 
+#the test error of linear model using least square 
+#problem: cannot lm 75 variables 
+
+#get the y from training set
+y = loantrain$delinq_2yrs
+#get a matrix of training set
+#x = model.matrix(delinq_2yrs~.,data=loantrain)
+
+#Principal Component Analysis (PCA)
+#pca = pcromp(,scale=FALSE)
+#nlevels(loantrain$recoveries)
+```
+
+Conclusion:
+- The status of the loan, 'Current', has the highest number of accounts with a high average loan issued 
+- 'Does not meet the credit policy. Status:Fully Paid' borrowers have the highest average ROI, but they have the smallest average loan issued
+- The number of payments on the loan correlates with the interest rate, i.e., 60 months of payments tend to have higher interest rate of approx. 18 percent than 30 months of payments with interest rate of approx. 13 percent
+- The average loan issued is approx. $14,000 across the provinces of USA, with California (CA) has the highest number of accounts
+- Approx. 524,000 (60%) borrowers requested the loan for debt consolidation 
+
+
+Next step...
+- Build a deliquency model
+- Find revelant predictors by the Principal Component Analysis (PCA)
+- Generate MSE plot on cross-validation from sample() function
+- Get model.matrix() to work to get a matrix of training set 
+          - Get the grid paramter for lambda
+          - create the model for lasso model
+
+
+
+
+
