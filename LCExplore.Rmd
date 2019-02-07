@@ -18,7 +18,7 @@ Downloading the data from SQLite:
 #install.packages("RSQLite")
 library("RSQLite")
 #connect to SQLite
-#dataframe = "/Users/carolphan/Desktop/STATS 4W03/lending-club-loan-data/database.sqlite"
+#dataframe = ".../lending-club-loan-data/database.sqlite"
 loan.sqlite = dbConnect(SQLite(),dbname=dataframe)
 ```
 
