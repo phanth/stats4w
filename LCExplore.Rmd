@@ -4,6 +4,14 @@ author: "Hoa Thuong Luu Phan (Carol Phan)"
 date: "2/6/2019"
 output: html_document
 ---
+LENDING CLUB LOAN 
+
+The dataset can be found [here](https://www.kaggle.com/wendykan/lending-club-loan-data/home). There are proxy 890,000 observations and 75 variables. The file contains all loans issued through the 2007-2015 with credit scores, deliquency, collections and many more.
+
+Goals:
+
+This project will examine the status of delinquency (response variable) of an account. Here we analyze the characteristics of various accounts that have indication of future delinquency.
+
 Downloading the data from SQLite:
 
 ```{r}
