@@ -82,16 +82,17 @@ y = loantrain$delinq_2yrs
 x = model.matrix(delinq_2yrs~.,data=loantrain)
 
 #Principal Component Analysis (PCA)
-#pca = pcromp(,scale=FALSE)
+#pca = prcomp(,scale=FALSE)
 #nlevels(loantrain$recoveries)
 
 
 ```
 Next step...
-- Find revelant predictors by the Principal Component Analysis (PCA)
-- Generate MSE plot on cross-validation from sample() function
-- Get model.matrix() to work to get a matrix of training set 
-          - Get the grid paramter for lambda
+
+- Find relevant predictors by the Principal Component Analysis (PCA)
+- Generate MSE plot on cross-validation from `sample()` function
+- Get `model.matrix()` to work to get a matrix of training set 
+          - Get the grid parameter for lambda
           - create the model for lasso model
 
 
