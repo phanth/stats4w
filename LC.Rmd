@@ -8,11 +8,19 @@ output:
 ---
 
 ```{r}
+## BMB: NO ABSOLUTE PATHNAMES PLEASE
+## use a project, or switch your working directory
+## see https://www.tidyverse.org/articles/2017/12/workflow-vs-script/
+##
+
+## BMB: are you actually using this?
 loan <- read.csv("/Users/carolphan/Desktop/STATS 4W03/lending-club-loan-data/loan.csv")
 #install.packages("RSQLite")
 library("RSQLite")
 library("dplyr")
 library("ggplot2")
+
+## where did you get the sqlite version from? did you download it or convert the CSV file?
 
 #connect to SQLite
 dataframe = "/Users/carolphan/Desktop/STATS 4W03/lending-club-loan-data/database.sqlite"
