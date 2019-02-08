@@ -12,35 +12,43 @@ output:
 ## use a project, or switch your working directory
 ## see https://www.tidyverse.org/articles/2017/12/workflow-vs-script/
 ##
-
-## BMB: are you actually using this?
-loan <- read.csv("/Users/carolphan/Desktop/STATS 4W03/lending-club-loan-data/loan.csv")
-#install.packages("RSQLite")
 library("RSQLite")
 library("dplyr")
 library("ggplot2")
+library("dbplyr")
 
-## where did you get the sqlite version from? did you download it or convert the CSV file?
+## data downloaded from https://www.kaggle.com/wendykan/lending-club-loan-data
+
+## loan <- read.csv("loan.csv")
 
 #connect to SQLite
-dataframe = "/Users/carolphan/Desktop/STATS 4W03/lending-club-loan-data/database.sqlite"
+dataframe = "database.sqlite"
 loan.sqlite = dbConnect(SQLite(),dbname=dataframe)
 #get a list of all tables 
 tables = dbListTables(loan.sqlite)
 #count the number of observations in the SQLite table
 pop = dbGetQuery(loan.sqlite,'select count(*) from loan') 
-#get the 'loan' table as a dataframe
-loan.sql = dbGetQuery(loan.sqlite,'select * from loan') 
-str(loan.sql)
-names(loan.sql)
-head(loan.sql,5)
-t(filter(loan.sql,id==1077501))
+##get the 'loan' table as a dataframe
+## BMB: do you really want to get the whole thing as
+##  a data frame? better to wait and take only the pieces you want
+##  (e.g. only test set or only training set)
+loan.sql = dbGetQuery(loan.sqlite,'select * from loan')
+
+## str(loan.sql)
+## names(loan.sql)
+## head(loan.sql,5)
+## t(filter(loan.sql,id==1077501))
 #Notice that loan.sql includes index 
 
+## BMB: redefining 'pop' here? all distinct ids, so same value ...
 pop=dbGetQuery(loan.sqlite,'select count(distinct(id)) from loan')
 dbGetQuery(loan.sqlite,'select count(distinct(member_id)) from loan')
 
-loan_status = dbGetQuery(loan.sqlite,'select loan_status, count(*), sum(loan_amnt)/(1000*count(*)) from loan GROUP BY loan_status')
+## explain what you're doing here?
+## (average loan amounts in $1000 by status)
+loan_status = dbGetQuery(loan.sqlite,
+   'select loan_status, count(*), sum(loan_amnt)/(1000*count(*)) from loan \
+GROUP BY loan_status')
 state = dbGetQuery(loan.sqlite,'select addr_state, count(*), sum(loan_amnt)/(1000*count(*)) from loan GROUP BY addr_state')
 purpose = dbGetQuery(loan.sqlite,'select purpose, count(purpose) from loan GROUP BY purpose')
 dq = dbGetQuery(loan.sqlite,'select delinq_2yrs, count(id) from loan GROUP BY delinq_2yrs')
@@ -48,8 +56,34 @@ cur_dq = dbGetQuery(loan.sqlite,'select count(*) from loan where acc_now_delinq 
 terms = dbGetQuery(loan.sqlite,'select term, count(id) from loan GROUP BY term')
 dq1 = dbGetQuery(loan.sqlite,'select mths_since_last_delinq, count(*) from loan GROUP BY mths_since_last_delinq')
 
+loan_status2 = (loan.sqlite
+    %>% tbl("loan")
+    %>% select(loan_status,loan_amnt)
+    %>% group_by(loan_status)
+    %>% summarise(count=n(), avg_loan=mean(loan_amnt)/1000)
+)
+show_query(loan_status2)
+loan_status2C <- collect(loan_status2)
+
+
 #plots/tables
-ggplot(data=loan_status[-1,],aes(loan_status,`sum(loan_amnt)/(1000*count(*))`,size=`count(*)`))+geom_point(colour="blue")+theme(axis.text.x = element_text(angle=90,hjust=1))+labs(y='Average Loan Amount in Thousand',title='Loan Status',size='# of Accounts')
+ggplot(data=loan_status[-1,],aes(loan_status,`sum(loan_amnt)/(1000*count(*))`,
+                                 size=`count(*)`))+
+    geom_point(colour="blue")+
+    theme(axis.text.x = element_text(angle=90,hjust=1))+
+    labs(y='Average Loan Amount in Thousand',
+         title='Loan Status',size='# of Accounts')
+## BMB: I'd suggest
+
+
+loan_status2C %>%
+    mutate(loan_status=reorder(loan_status,avg_loan)) %>%
+    na.omit() %>%
+ggplot(aes(loan_status,avg_loan,size=count/1000))+
+    geom_point(colour="blue")+
+    labs(y='Average Loan Amount ($1000)',x="",
+         title='Loan Status',size='# of Accounts (thousands)')+
+    coord_flip()
 
 ggplot(data=state[-1,],aes(addr_state,`sum(loan_amnt)/(1000*count(*))`,size=`count(*)`))+geom_point(colour="red")+theme(axis.text.x = element_text(angle=90,hjust=1))+labs(y='Average Loan Amount in Thousand',title='USA',size='# of Accounts',x='States')
 purpose 
@@ -59,8 +93,11 @@ terms
 loan = loan.sql[,-1]
 #make the results reproducible
 set.seed(1)
-#set the training set
-train = sample(887383,443690)
+##set the training set
+## BMB: shouldn't use raw numbers. Something more like
+ntot <- pull(pop)  ## pull() extracts a column from a tibble
+train <- sample(ntot,round(0.5*ntot))
+## train = sample(887383,443690)
 #set the test set
 test = (-train) 
 #split the loan data based on the training set
@@ -68,6 +105,8 @@ loantrain = loan[train,]
 #splot the loan data based in the test set 
 loantest = loan[test,]
 
+## BMB: worth looking for a way to subset the data inside the
+##  database?
 #View(loantrain)
 #make the results reproducible
 set.seed(1)

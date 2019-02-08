@@ -1,0 +1,6 @@
+## ignore big data files
+LCDataDictionary.xlsx
+database.sqlite
+loan.csv
+\#*
+.#*
