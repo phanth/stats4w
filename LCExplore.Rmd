@@ -149,6 +149,183 @@ Next step...
           - create the model for lasso model
 
 
+Dealing with "..applied only to factors with 2 or more levels" error:
+When divided into train/test sets, some of categorical variables ended up with only a single variable.
+(1) do stratified/balanced splitting ("caret" package)
+(2) lump rare factor levels ("forcats" package)
+(3) throw away input variables that are very unbalanced 
+
+```{r}
+#summarize all of factor variables and look at the distribution of number of observations across levels to decide (1), (2) or (3)
+#convert all character input variables to factors
+loantrain <- loantrain %>%
+  mutate_if(sapply(loantrain, is.character),as.factor)
+sapply(loantrain, class)
+summary(loantrain)
+
+loantrain.char = loantrain[,sapply(loantrain, class)=='factor']
+loantrain.num = loantrain[,sapply(loantrain, class)=='numeric']
+
+length(loantrain.char)
+length(loantrain.num)
+
+#head(loantrain.char,5)
+summary(loantrain.char)
+
+#install.packages("devtools")
+#devtools::install_github("ropenscilabs/skimr",force = TRUE)
+#summary(loantrain)
+library(skimr) 
+#url, desc and id are removed from the data frame (unique for each obs)
+loantrain.char <- select(loantrain.char,-c(url,desc,id))
+skim(loantrain.char) #this may take awhile to load 
+#verification_status_joint has 443403 NA's
+#pymnt_plan only have 5 'y' obs
+#application_type has 443401 IND obs 
+loantrain.char <- select(loantrain.char,-c(verification_status_joint,pymnt_plan,application_type))
+
+#we are going to take a look at continuous input variables
+#head(loantrain.num,5)
+summary(loantrain.num)
+#Error in UseMethod("mean") : no applicable method for 'mean' applied to an object of class "c('double', 'numeric')
+#skim(loantrain.num)
+
+#drop member_id 
+#variables with more than 400,000 obs Nas:
+#inq_last_12m
+#total_cu_tl
+#inq_fi
+#all_util
+#max_bal_bc
+#open_rv_24m
+#open_rv_12m
+#il_util
+#total_bal_il
+#mths_since_rcnt_il
+#open_il_24m
+#open_il_12m
+#open_il_6m
+#open_acc_6m
+#dti_joint
+#annual_inc_joint
+
+#total of 16 variables...
+#validate this by sql or manually pivot in Excel to count number of Na's
+
+#NA is equivalent to 'blank' in the raw dataset, it could mean missing data OR ... (e.g. NA in annual_inc_joint because the type of account is not joint so this is not missing data; get rid of this column or fill Nas with 0s)
+
+#right now drop it 
+loantrain.num <- select(loantrain.num,-c(member_id,
+                                         inq_last_12m,
+                                         total_cu_tl,
+                                         inq_fi,
+                                         all_util,
+                                         max_bal_bc,
+                                         open_rv_24m,
+                                         open_rv_12m,
+                                         il_util,
+                                         total_bal_il,
+                                         mths_since_rcnt_il,
+                                         open_il_24m,
+                                         open_il_12m,
+                                         open_il_6m,
+                                         open_acc_6m,
+                                         dti_joint,
+                                         annual_inc_joint))
+
+summary(loantrain.num)
+
+#going back to categorical variables 
+#check loantrain and loantest have same number of levels as original data
+
+```
+
+Principal Components Analysis (PCA)
+
+```{r}
+#drop variables that are related to delinquency:
+#delinq_2yrs
+#mths_since_last_delinq
+#acc_now_delinq
+loantrain.num.pca <- select(loantrain.num,-c(delinq_2yrs,mths_since_last_delinq,acc_now_delinq))
+
+#Error in svd(x, nu = 0) : infinite or missing values in 'x'
+#prcomp(loantrain.num)
+
+#replace missing values with column means
+for(i in 1:ncol(loantrain.num.pca)){
+  loantrain.num.pca[is.na(loantrain.num.pca[,i]), i] <- mean(loantrain.num.pca[,i], na.rm = TRUE)
+}
+head(loantrain.num.pca,5)
+
+prcomp(loantrain.num.pca) #works but inappropriate
+#prcomp(loantrain.num,scale.=TRUE)
+#Error in prcomp.default(loantrain.num, scale. = TRUE) : cannot rescale a constant/zero column to unit variance
+#identify the zero-variance column
+which(apply(loantrain.num.pca, 2, var)==0)
+#remove zero variance columns
+loantrain.num.pca2<-loantrain.num.pca[,apply(loantrain.num.pca, 2, var)!=0]
+#check
+#str(loantrain.num.pca2)
+pca<-prcomp(loantrain.num.pca2,scale=TRUE)
+pca
+summary(pca)
+
+#interpretation:
 
 
 
+
+#we are going to do pca for numeric input variables
+#https://stats.stackexchange.com/questions/2691/making-sense-of-principal-component-analysis-eigenvectors-eigenvalues
+#pca looks for properties that show as much variation across data
+#pca looks for properties that allow to reconstruct the original characteristics as well as possible
+
+```
+
+
+Simple lm():
+```{r}
+#str(loantrain.char)
+#str(loantrain.num)
+lm(delinq_2yrs~.,data=loantrain.num)
+#using type = "numeric" with a factor response will be ignoredError in `contrasts<-`(`*tmp*`, value = contr.funs[1 + isOF[nn]]) : contrasts can be applied only to factors with 2 or more levels
+#lm(loan_status~.,data=loantrain.char)
+#skim(loantrain.char)
+str(loantrain.char)
+#all categorical variables have 2 or more n_unique...
+#let's do this manually...
+#find the number of levels of factor variables 
+ifelse(n <- sapply(loantrain.char, function(x) length(levels(x))) == 1, "DROP", "NODROP")
+#there is no need to drop variables, what is the problem...
+#CANNOT USE A LINEAR REGRESSION MODEL WITH A FACTOR AS RESPONSE VARIABLE
+
+loantrain.new <- select(loantrain,-c(url,
+                                     desc,
+                                     id,
+                                     verification_status_joint,
+                                     pymnt_plan,
+                                     application_type,member_id,
+                                     inq_last_12m,
+                                     total_cu_tl,
+                                     inq_fi,
+                                     all_util,
+                                     max_bal_bc,
+                                     open_rv_24m,
+                                     open_rv_12m,
+                                     il_util,
+                                     total_bal_il,
+                                     mths_since_rcnt_il,
+                                     open_il_24m,
+                                     open_il_12m,
+                                     open_il_6m,
+                                     open_acc_6m,
+                                     dti_joint,
+                                     annual_inc_joint,
+                                     policy_code
+                                     ))
+str(loantrain.new)
+#again, replace NAs with column means (only continuous variables)
+
+lm(delinq_2yrs~.,data=loantrain.new) #very slow but working...
+```
