@@ -1,0 +1,193 @@
+---
+title: extracting train/test from data set within RDBMS
+author: Ben Bolker
+---
+
+**Goal**: extract train/test data set from a data set stored in a data base.
+
+**desiderata**:
+
+- efficient
+- clean/pretty syntax (I prefer `dbplyr`/tidyverse because I'm more familiar with it ...)
+- platform-independent (not all databases have the same back-end capabilities, although if something works in (R)SQLite then it probably works pretty broadly ...)
+- reproducible
+
+```{r pkgs,message=FALSE}
+library("RSQLite")
+library("dbplyr")
+library("dplyr")
+library("rbenchmark")
+```
+
+"How do I efficiently/robustly sample rows from a database?" is a *very* frequent question, see e.g. [here](http://jan.kneschke.de/projects/mysql/order-by-rand/) or [here](http://mysql.rjweb.org/doc.php/random), or [this tutorial](http://www.mysqltutorial.org/select-random-records-database-table.aspx), or this [SO question](https://stackoverflow.com/questions/580639/how-to-randomly-select-rows-in-sql/1209946#1209946) ...
+
+```{r defs}
+nr <- 1e5
+nc <- 900
+```
+
+Make up a data set to play with:
+
+```{r testdat,cache=TRUE}
+dd <- data.frame(id=1:nr,matrix(rnorm(nr*nc),nrow=nr))
+dim(dd)
+## clean up
+unlink("test.sqlite")
+unlink("test.sqlite-journal")
+test.sqlite = dbConnect(SQLite(),dbname="test.sqlite")
+dbWriteTable(test.sqlite, "test", dd, overwrite=TRUE)
+```
+
+Reconnect to data frame (if necessary because previous chunk is cached):
+```{r reconnect}
+test.sqlite = dbConnect(SQLite(),dbname="test.sqlite")
+```
+
+Note that SQLite's `random()` function (which is its version of `RAND()`, more common in SQL-based systems) **cannot be seeded**
+(see [here](https://stackoverflow.com/questions/2171578/seeding-sqlite-random) and [here](https://stackoverflow.com/questions/24256258/order-by-random-with-seed-in-sqlite)),
+so this solution is not reproducible. Ugh.
+
+```{r queries}
+queries <- c(nonrand='SELECT * from test limit 1000',
+     rand1='SELECT * from test order by random() limit 1000',
+     rand2='SELECT * FROM test WHERE random()<\
+(SELECT ((1000/COUNT(*))*10) FROM test) LIMIT 1000',
+     rand3='SELECT t.* FROM test AS t JOIN \
+(SELECT ROUND(random() * (SELECT MAX(id) FROM test)) AS id) AS \
+x WHERE t.id >= x.id LIMIT 1000'
+)
+```
+
+Make sure all queries return the right dimensions ...
+```{r test_q,cache=TRUE}
+for (q in queries) {
+    ## print(q)
+    if (!identical(qdim <- dim(dbGetQuery(test.sqlite,q)),c(1000L,as.integer(nc+1)))) {
+        cat(q,"\n")
+        print(qdim)
+    }
+}
+```
+(this chunk appears to be not entirely reproducible/deterministic - usually works, but fails *sometimes*?)
+
+We can use these queries in a tidyverse workflow by using `tbl(sql(.))`
+(note we need to use `[[]]` in extracting elements from a named vector ...)
+
+```{r test_tidy}
+stopifnot(identical(train_dat0 <- (test.sqlite %>% tbl(sql(queries[[1]])) %>% collect()),
+                    as_tibble(dbGetQuery(test.sqlite,queries[[1]]))))
+```
+
+```{r run_bench,cache=TRUE}
+b1 <- benchmark(
+    dbGetQuery(test.sqlite,queries[["nonrand"]]),
+    dbGetQuery(test.sqlite,queries[["rand1"]]),
+    dbGetQuery(test.sqlite,queries[["rand2"]]),
+    dbGetQuery(test.sqlite,queries[["rand3"]]),
+    test.sqlite %>% tbl(sql(queries[["rand3"]])) %>% collect(),
+    replications=50,
+    columns=c('test', 'elapsed', 'replications', 'relative')
+)
+```
+
+```{r print_bench}
+print(b1)
+```
+
+The crude method (`ORDER by random()`) is actually fastest for this small database; reading the various SQL info suggests that it may not scale very well.
+
+How about the possibly more sensible, reproducible method of
+pulling the id values out first? This also makes it relatively
+easy to get train and test sets by using `inner_join()` vs.
+`anti_join()` ...
+
+```{r tidyverse,cache=TRUE}
+## extract ID column
+all_ids <- (test.sqlite
+    %>% tbl("test")
+    %>% select(id)
+    %>% collect()
+)
+## generate sample IDs for training set
+## might want to compute ntot <- nrow(all_ids); s <- round(ntot/2)
+train_ids <- (all_ids
+    %>% pull(id)
+    %>% sample(size=1000)
+)
+## inner join to extract only elements from training set;
+## copy=TRUE copies the train IDs back into the database
+## where they can be joined 
+train_dat <- (test.sqlite
+    %>% tbl("test")
+    %>% inner_join(tibble(id=train_ids),copy=TRUE,by="id")
+    %>% collect()
+)
+## anti-join to extract only elements NOT in training set
+test_dat <-  (test.sqlite
+    %>% tbl("test")
+    %>% anti_join(tibble(id=train_ids),copy=TRUE,by="id")
+    %>% collect()
+)
+```
+
+
+Results are *not* the same as before because different random numbers
+are used: the best we can do is check dimensions.
+
+```{r test_tidy2}
+all.equal(dim(train_dat0), dim(train_dat))
+```
+
+Not sure about speed ... what's a fair comparison?
+
+```{r leftovers, echo=FALSE, eval=FALSE}
+dataframe = "lending-club-loan-data/database.sqlite"
+loan.sqlite = dbConnect(SQLite(),dbname=dataframe)
+loan.tbl <- tbl(loan.sqlite,"loan")
+## count total number of rows
+ntot <- loan.tbl %>% count() %>% collect() %>% pull(n)
+print(ntot)
+set.seed(1)
+train = sample(ntot,floor(ntot/2))
+small <- dbGetQuery(loan.sqlite,'select * from loan limit 10000')
+## smtrain <- dbGetQuery(loan.sqlite,'select * from loan order by random() limit 1000')
+pop = dbGetQuery(loan.sqlite,'select count(*) from loan')
+loan.tbl 
+## inefficient but not necessarily a better way to do it?
+loantrain.new <- (loan.tbl
+    %>% filter(row_number() %in% train)
+)
+
+count_NAs <- (loantrain.new
+    %>% summarise_all(funs(sum(is.na(.))))
+    %>% collect()
+)
+        
+    %>% select(loantrain,-c(index,
+                            url,
+                            desc,
+                            id,
+                            verification_status_joint,
+                            pymnt_plan,
+                            application_type,member_id,
+                            inq_last_12m,
+                            total_cu_tl,
+                            inq_fi,
+                            all_util,
+                            max_bal_bc,
+                            open_rv_24m,
+                            open_rv_12m,
+                            il_util,
+                            total_bal_il,
+                            mths_since_rcnt_il,
+                            open_il_24m,
+                            open_il_12m,
+                            open_il_6m,
+                            open_acc_6m,
+                            dti_joint,
+                            annual_inc_joint,
+                            policy_code
+                            ))
+
+
+```
