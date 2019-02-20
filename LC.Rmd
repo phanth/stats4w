@@ -26,7 +26,7 @@ dataframe = "database.sqlite"
 loan.sqlite = dbConnect(SQLite(),dbname=dataframe)
 #get a list of all tables 
 tables = dbListTables(loan.sqlite)
-#count the number of observations in the SQLite table
+#count the number of observations in the SQLite tablep
 pop = dbGetQuery(loan.sqlite,'select count(*) from loan') 
 ##get the 'loan' table as a dataframe
 ## BMB: do you really want to get the whole thing as
@@ -56,6 +56,12 @@ cur_dq = dbGetQuery(loan.sqlite,'select count(*) from loan where acc_now_delinq 
 terms = dbGetQuery(loan.sqlite,'select term, count(id) from loan GROUP BY term')
 dq1 = dbGetQuery(loan.sqlite,'select mths_since_last_delinq, count(*) from loan GROUP BY mths_since_last_delinq')
 
+loan.sqlite %>%
+    tbl("loan") %>%
+    select(loan_status) %>%
+    summarise(m=median(loan_status))
+
+ 
 loan_status2 = (loan.sqlite
     %>% tbl("loan")
     %>% select(loan_status,loan_amnt)

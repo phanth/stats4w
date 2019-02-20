@@ -6,7 +6,7 @@ output: html_document
 ---
 LENDING CLUB LOAN 
 
-The dataset can be found [here](https://www.kaggle.com/wendykan/lending-club-loan-data/home). There are proxy 890,000 observations and 75 variables. The file contains all loans issued through the 2007-2015 with credit scores, deliquency, collections and many more.
+The dataset can be found [here](https://www.kaggle.com/wendykan/lending-club-loan-data/home). There are proxy 890,000 observations and 75 variables. The file contains all loans issued through the 2007-2015 with credit scores, delinquency, collections and many more.
 
 Goals:
 
@@ -18,7 +18,7 @@ Downloading the data from SQLite:
 #install.packages("RSQLite")
 library("RSQLite")
 #connect to SQLite
-#dataframe = ".../lending-club-loan-data/database.sqlite"
+dataframe = "lending-club-loan-data/database.sqlite"
 loan.sqlite = dbConnect(SQLite(),dbname=dataframe)
 ```
 
@@ -38,10 +38,12 @@ str(loan.sql)
 head(loan.sql,5)
 #t(filter(loan.sql,id==1077501))
 
+## BMB: why do this???
 loan.sql[is.na(loan.sql)]<- 999999999
 ```
 
 Generate summaries of the data:
+
 
 ```{r}
 library("dplyr")
@@ -96,7 +98,7 @@ empt
 
 ```
 
-We are going to avoid data-snooping around deliquency related variables 
+We are going to avoid data-snooping around delinquency related variables 
 
 Generate training set and test set:
 
@@ -141,11 +143,11 @@ Conclusion:
 
 
 Next step...
-- Build a deliquency model
-- Find revelant predictors by the Principal Component Analysis (PCA)
+- Build a delinquency model
+- Find relevant predictors by the Principal Component Analysis (PCA)
 - Generate MSE plot on cross-validation from sample() function
 - Get model.matrix() to work to get a matrix of training set 
-          - Get the grid paramter for lambda
+          - Get the grid parameter for lambda
           - create the model for lasso model
 
 
