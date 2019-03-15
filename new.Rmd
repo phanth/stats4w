@@ -1,0 +1,343 @@
+---
+title: "LC_clean_up"
+author: "Hoa Thuong Luu Phan (Carol Phan)"
+date: "2/16/2019"
+output: html_document
+---
+Synopsis
+This project will examine the status of delinquency (response variable) of an account. Here we analyze the characteristics of various accounts that have indication of future delinquency.
+
+Explore Data
+The dataset can be found [here](https://www.kaggle.com/wendykan/lending-club-loan-data/home). There are approximately 890,000 observations and 75 variables. The file contains all loans issued through the 2007-2015 with credit scores, deliquency, collections and many more.
+
+```{r setup}
+#required package
+library("RSQLite")
+library("dbplyr")
+library("dplyr")
+library("skimr")
+library("tidyr")
+library("glmnet")
+library("forcats") 
+library("stringr")
+
+```
+
+```{r}
+#connect to SQLite
+dataframe = "..."
+loan.sqlite = dbConnect(SQLite(),dbname=dataframe)
+tables = dbListTables(loan.sqlite)
+loan.tbl <- tbl(loan.sqlite,"loan")
+ntot <- loan.tbl %>% count() %>% collect() %>% pull(n)
+```
+
+
+Problem Formulation
+There are misclassification in int_rate and revol_util and grouping emp_title
+
+```{r}
+loan.sql = dbGetQuery(loan.sqlite,'select * from loan')
+#int_rate variable
+loan.sql$int_rate = (as.numeric(gsub(pattern = "%",replacement = "",x = loan.sql$int_rate)))
+#revol_util
+loan.sql$revol_util = (as.numeric(gsub(pattern = "%",replacement = "",x = loan.sql$revol_util)))
+
+
+####################################
+#title
+loan.sql$title <- fct_explicit_na(loan.sql$title)
+loan.sql$title <- tolower(str_replace_all(loan.sql$title,fixed(" "),""))
+loan.sql$title <- fct_lump(loan.sql$title,n=5,other_level = "other")
+count.title <- data.frame(table(loan.sql$title)) %>% arrange(desc(Freq))
+count.title
+
+#emp_title
+test <- loan.sql$emp_title
+loan.sql$emp_title <- fct_explicit_na(loan.sql$emp_title)
+
+
+loan.sql$emp_title <- fct_explicit_na(loan.sql$emp_title)
+loan.sql$emp_title <- fct_lump(loan.sql$emp_title,n=5,other_level = "other")
+count.emp <- data.frame(table(loan.sql$emp_title)) %>% arrange(desc(Freq))
+count.emp
+####################################
+test <- loan.sql$title 
+length(unique(test)) #63146
+test <- tolower(str_replace_all(test,fixed(" "),""))
+length(unique(test)) #49326
+test <- str_replace_all(test, "[^[:alnum:]]", "")
+length(unique(test)) #47164
+test <- gsub("[[:digit:]]", "",test)
+length(unique(test)) #45192
+test <- str_sort(test,character=TRUE)
+
+count.title <- data.frame(table(test)) %>% arrange(desc(Freq))
+names <- as.list(levels(count.title$test)) 
+names <- str_sort(names,character=TRUE)
+
+#sample
+test1 <- test[1:1000]
+length(unique(test1)) #420
+unique.test1 <- unique(test)
+
+e <- adist(unique.test1,ignore.case = TRUE,costs=c(i=1,d=1,s=2))
+rownames(e) <- unique.test1
+hc <- hclust(as.dist(e))
+plot(hc)
+rect.hclust(hc,k=200)
+
+
+df <- data.frame(unique.test1,cutree(hc,k=200))
+names(df) <- c("title","cluster")
+df[order(-df$cluster),]
+plot(table(df$cluster))
+
+#if there is only one varianle then put it as others 
+
+####################################
+
+
+#group months
+loan.sql$issue_m = sapply(loan.sql$issue_d ,function(x){strsplit(x,"-")[[1]][1]})
+
+#earliest_cr_line
+loan.sql %>% slice(1:50) %>% View()
+```
+
+Dealing with Missing Values 
+
+Drop columns that contains more than 50% NAs
+```{r}
+count_NAs <- (loan.sql
+              %>% summarise_all(funs(sum(is.na(.),na.rm = TRUE)))
+              %>% collect())
+count_NAs <- t(count_NAs)
+count_NAs
+count_NAs <- count_NAs*100/ntot
+colnames(count_NAs) <- ("NAs")
+count_NAs<- round(count_NAs,4)
+drop <- row.names(count_NAs)[count_NAs>50]
+drop
+drop2 <- c("index","id","member_id","url","desc","i","last_pymnt_d","last_credit_pull_d","next_pymnt_d")
+loan.sql <- select(loan.sql,-c(drop,drop2))
+count_NAs
+
+#there is one observation that is NA
+
+```
+
+Replace missing values with the mean value for continuous variables
+```{r}
+str(loan.sql)
+var <- names(loan.sql)
+for (j in 1:length(var)){
+  if (is.numeric(loan.sql[,var[j]])==TRUE){
+    loan.sql[is.na(loan.sql[,j]), j] <- mean(loan.sql[,j], na.rm = TRUE)
+  }
+}
+count_NAs <- (loan.sql
+              %>% summarise_all(funs(sum(is.na(.),na.rm = TRUE)))
+              %>% collect())
+count_NAs <- t(count_NAs)
+count_NAs
+
+```
+
+
+Zero Variance 
+
+```{r}
+loan.num <- loan.sql[,sapply(loan.sql, class)=='numeric']
+
+
+
+```
+
+
+Training and Test sets
+
+```{r}
+## count total number of rows
+ntot <- loan.tbl %>% count() %>% collect() %>% pull(n)
+print(ntot)
+set.seed(1)
+train = sample(ntot,floor(ntot/2))
+small <- dbGetQuery(loan.sqlite,'select * from loan limit 10000')
+pop = dbGetQuery(loan.sqlite,'select count(*) from loan')
+loan.tbl
+#do not return (already in the loan table)
+dbSendQuery(loan.sqlite,"ALTER TABLE loan ADD COLUMN i INTEGER")
+dbSendQuery(loan.sqlite,"UPDATE loan SET (i) = ROWID")
+loan.tbl <- tbl(loan.sqlite,"loan")
+#check if i is in the data
+head(loantrain.new,5)
+
+loantrain.new <- (loan.tbl 
+                  %>% filter(i %in% train))
+loantest <- (loan.tbl 
+                  %>% filter(!(i %in% train)))
+
+#head(loantest,5)
+```
+
+Problem Formulation
+
+```{r}
+count_NAs <- (loantrain.new
+              %>% summarise_all(funs(sum(is.na(.),na.rm = TRUE)))
+              %>% collect())
+count_NAs <- t(count_NAs)
+count_NAs <- count_NAs*100/length(train)
+colnames(count_NAs) <- ("NAs")
+count_NAs<- round(count_NAs,4)
+count_NAs
+drop <- row.names(count_NAs)[count_NAs>90]
+drop
+drop2 <- c("index","id","member_id","url","desc","i")
+loantrain.new <- select(loantrain.new,-c(drop,drop2))
+loantest <- select(loantest,-c(drop,drop2))
+loantrain.train <- as.data.frame(loantrain.new)
+
+#write.csv(loantrain.train,'loantrain.csv')
+summary(loantrain.train)
+loantrain.num <- loantrain.train[,sapply(loantrain.train, class)=='numeric']
+
+head(loantrain.num,5)
+length(loantrain.num)
+
+#drop variables that are related to delinquency:
+#delinq_2yrs
+#mths_since_last_delinq
+#acc_now_delinq
+loantrain.num.pca <- select(loantrain.num,-c(delinq_2yrs,mths_since_last_delinq,acc_now_delinq))
+
+#replace missing values with column means 
+for(i in 1:ncol(loantrain.num.pca)){
+  loantrain.num.pca[is.na(loantrain.num.pca[,i]), i] <- mean(loantrain.num.pca[,i], na.rm = TRUE)
+}
+
+############################################
+var.list <- names(loantrain.train)
+for (j in 1:length(var.list)){
+  if (is.numeric(loantrain.train[,var.list[j]])==TRUE){
+    loantrain.train[is.na(loantrain.train[,j]), j] <- mean(loantrain.train[,j], na.rm = TRUE)
+  }
+}
+loantrain.train %>% slice(1:25) %>% View()
+
+
+loantrain.fac.test <- loantrain.train[,sapply(loantrain.train, class)=='factor']
+names(loantrain.fac.test)
+str(loantrain.fac.test)
+prop.table(table(loantrain.fac.test$grade))
+
+
+loantrain.fac.test %>% slice(1:25) %>% View()
+
+#Misclassified numbers
+#int_rate, revol_util, emp_title, title 
+#how to deal with misclassified?
+
+
+#mfa
+#how to deal with date variables?
+#how to deal with NAs within categorical variables?
+#replace NAs data according to the proportion of the existing data
+
+#how to deal with imbalanced classification?
+#stratified bootstrap
+#better weighted random forest
+
+str(loantrain.fac.test)
+loantrain.fac.test %>% purrr::map_int(~length(unique(.))) %>% sort()
+
+fac.list <- (loantrain.fac.test
+             %>% select_if(~length(unique(.))<100))
+summary(fac.list)
+
+
+
+
+
+#################################
+#prcomp(loantrain.num.pca) #works but inappropriate
+#prcomp(loantrain.num,scale.=TRUE)
+#Error in prcomp.default(loantrain.num, scale. = TRUE) : cannot rescale a constant/zero column to unit variance
+#identify the zero-variance column
+which(apply(loantrain.num.pca, 2, var)==0)
+#remove zero variance columns
+loantrain.num.pca2<-loantrain.num.pca[,apply(loantrain.num.pca, 2, var)!=0]
+#check
+#str(loantrain.num.pca2)
+pca<-prcomp(loantrain.num.pca2,scale=TRUE)
+pca
+summary(pca)
+
+
+########################################################
+#what about categorical variables?
+loantrain.train <- loantrain.train %>%
+  mutate_if(sapply(loantrain.train, is.character),as.factor)
+#sapply(loantrain.train, class)
+
+loantrain.char = loantrain.train[,sapply(loantrain.train, class)=='factor']
+#summary(loantrain.char)
+skim(loantrain.char)
+factors <- colnames(loantrain.char)
+#factors <- c("term","int_rate","grade")
+#counting levels 
+#check.levels <- (loan.tbl
+#                 %>% describe())
+#inspect()
+#check.levels
+#paymnt_plan only have 5 'y' obs
+#application_type has 290 JOI obs
+
+loantrain.train <- select(loantrain.train,-c(policy_code,pymnt_plan,application_type))
+loantest <- select(loantest,-c(policy_code,pymnt_plan,application_type))
+
+#bootstrap tree
+#Random forest
+#generating random subsets of the data 
+#sub-sampling variables 
+#how to tune? how many splits? subsets?
+#cross-validation
+###############################################
+#how does glmnet handle NA values?
+#glmnet does not handle missing values
+
+#fit the linear model 
+lm <- lm(delinq_2yrs~.,data=loantrain.train)
+summary(lm)
+pr = predict(lm,loantest) #predict the result of the linear model
+mean((loantest$delinq_2yrs - pr)^2) #the test error of linear model using least square
+head(loantrain.train,5)
+#Problem: length of x and y are not matching. why?
+x = model.matrix(delinq_2yrs~., data = loantrain.train) #get a matrix of training set
+y = loantrain.train$delinq_2yrs #get the y from training set
+summary(x)
+
+#ytest = y[loantest] #get the y from test set
+grid = 10^seq(10,-2,length = 100) #set the grid parameter for lambda
+ridgemodel = glmnet(x,y,alpha = 0, lambda = grid) #alpha = 0 is ridge regression
+cv.ri = cv.glmnet(x,y,alpha =0) #cross validation for ridge
+best.ri = cv.ri$lambda.min #get the minimal lambda from cross validation
+pred.ri = predict(fit.ri, s = best.ri, newx = x[test,]) #now predict using those lambda values
+mean((pred.ri-ytest)^2)  #test error of ridge
+#do not use pca with ridge (already selected)
+
+
+lassomodel = glmnet(x,y,alpha = 1, lambda = grid) #creat the model for lasso model
+cv.la = cv.glmnet(x,y,alpha =1) #cross validation for lasso
+best.la = cv.la$lambda.min #get the minimal lambda from cross validation
+pred.la = predict(fit.la, s = best.la, newx = x[loantest,]) #now predict using those lambda values
+mean((pred.la-ytest)^2)  #test error of lasso
+loanmatrix = model.matrix(delinq_2yrs~., data =loantrain.train) #get a matrix of the data 
+la.mo = glmnet(loanmatrix,y,alpha =1, lambda = best.la) #fit the lasso model using the lambda values with the loanmatrix
+coef(la.mo) #get the coefficient of the lasso
+``` 
+
+
+
+
