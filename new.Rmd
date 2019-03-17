@@ -25,7 +25,7 @@ library("stringr")
 
 ```{r}
 #connect to SQLite
-dataframe = "..."
+dataframe = "lending-club-loan-data/database.sqlite"
 loan.sqlite = dbConnect(SQLite(),dbname=dataframe)
 tables = dbListTables(loan.sqlite)
 loan.tbl <- tbl(loan.sqlite,"loan")
@@ -33,10 +33,12 @@ ntot <- loan.tbl %>% count() %>% collect() %>% pull(n)
 ```
 
 
-Problem Formulation
-There are misclassification in int_rate and revol_util and grouping emp_title
+## Problem Formulation
+
+There are misclassifications in `int_rate` and `revol_util` and grouping `emp_title`
 
 ```{r}
+## BMB: should we get everything or take fewer columns ... ?
 loan.sql = dbGetQuery(loan.sqlite,'select * from loan')
 #int_rate variable
 loan.sql$int_rate = (as.numeric(gsub(pattern = "%",replacement = "",x = loan.sql$int_rate)))
@@ -55,14 +57,14 @@ count.title
 #emp_title
 test <- loan.sql$emp_title
 loan.sql$emp_title <- fct_explicit_na(loan.sql$emp_title)
-
-
 loan.sql$emp_title <- fct_explicit_na(loan.sql$emp_title)
 loan.sql$emp_title <- fct_lump(loan.sql$emp_title,n=5,other_level = "other")
 count.emp <- data.frame(table(loan.sql$emp_title)) %>% arrange(desc(Freq))
 count.emp
 ####################################
-test <- loan.sql$title 
+
+lu <- function(x) length(unique(x))
+lu(loan.sql$title) ## ??? BMB: I'm only getting 5, you have 63146?
 length(unique(test)) #63146
 test <- tolower(str_replace_all(test,fixed(" "),""))
 length(unique(test)) #49326
@@ -93,7 +95,7 @@ names(df) <- c("title","cluster")
 df[order(-df$cluster),]
 plot(table(df$cluster))
 
-#if there is only one varianle then put it as others 
+#if there is only one variable then put it as others 
 
 ####################################
 
