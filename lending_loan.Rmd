@@ -1,0 +1,412 @@
+---
+title: "Lending Club Loan Data"
+author: "Hoa Thuong Luu Phan (Carol Phan)"
+date: "3/26/2019"
+output:
+   html_document:
+     toc: true
+---
+
+# Introduction 
+
+## Overview 
+
+The data set can be found [here](https://www.kaggle.com/wendykan/lending-club-loan-data). The file contains loans issued through 2007-2015 with approximately 887,383 observations and 75 variables, including demographic factors and the current loan status. The dictionary file is also provided in a seperate file.
+
+## Synopsis 
+
+The purpose of this analysis is to find an effective predictive model that determines the risk of an account being default. Here I analyze the characteristics of various accounts that have indication of future delinquency.
+
+## Data Extraction
+
+### Packages
+
+```{r library}
+library("RSQLite")
+library("dbplyr")
+library("dplyr")
+library("tidyr")
+library("forcats") 
+library("stringr")
+library("lubridate")
+library("reshape2")
+library("ggplot2")
+library("vcd")
+library("class")
+library("RcppEigen")
+library("purrr")
+library("biglm")
+library("glmnet")
+#library("randomForest")
+library("ranger")
+library("caret")
+```
+I used the SQLite package to extract the data to R. 
+```{r connect to SQLite}
+dataframe = "lending-club-loan-data/database.sqlite"
+loan.sqlite = dbConnect(SQLite(),dbname=dataframe)
+tables = dbListTables(loan.sqlite)
+loan.tbl <- tbl(loan.sqlite,"loan")
+ntot <- loan.tbl %>% count() %>% collect() %>% pull(n)
+loan.sql = dbGetQuery(loan.sqlite,'select * from loan')
+head(loan.sql,5) #snapshot of the dataset
+#ntot #total number of obsservations
+#length(loan.sql) #number of variables
+```
+
+## Problem Formulation
+`int_rate` and `revol_util` were miclassified as character variables, as I encoded them as numeric. To deal with missing values in the data set, I dropped variables that contain more than 50% `NA`s. `annual_inc_joint` and `dti_joint` have more than 50% NAs, because majority of application_type is INDIVIDUAL and so, we do not want to omit JOINT accounts. Hence, avg_inc and avg_dti are the average income and dti of borrower and co-borrower, respectively. For missing values in continuous variables, I replaced them with column median. I noticed that some of the categorical variables contain only one NA observation so they were removed. title and emp_title have the most unique levels due to different kind of inputs. There were 47 variables left-over after data cleaning.
+```{r save}
+loan.fini <- read.csv("lending-club-loan-data/loan.fini.csv")
+sapply(loan.fini,"class")
+loan.sql <- dplyr::select(loan.fini,-"X")
+head(loan.sql,5)
+```
+# Data Exploration
+
+## Graphical Exploration 
+
+We are going to avoid data-snooping around delinquency related variables
+```{r graphical}
+agg <- (loan.sql
+        %>% group_by(term,grade,emp_title,emp_length,home_ownership,purpose,addr_state)
+        %>% summarise(numUsers=n(),
+                      avgpmt=sum((total_pymnt/funded_amnt)*100)/numUsers))
+
+ggplot(data=agg,aes(avgpmt,numUsers))+geom_point(colour="red")
+```
+The percentage of average payment per account is approximately 60% as shown in the above plot. 
+
+```{r}
+cotabplot(~grade+term|home_ownership,data=loan.sql)
+```
+There is a relationship between GRADE and TERM in home_ownership (OWN, MORTAGE and RENT). Majority of accounts with a term of 36 months are from grade A, B and C. 
+
+```{r}
+ggplot(loan.sql,aes(x=term,y=loan_amnt,fill=term))+geom_boxplot() + facet_wrap(~emp_length)
+```
+The total amount of loans with the term of 60 months are higher than the total amount of loans with the term of 36 months. There is no difference across emp_length.
+
+```{r}
+ggplot(loan.sql,aes(x=addr_state,y=loan_amnt))+geom_boxplot()+theme(axis.text.x = element_text(angle=90,hjust=1))
+```
+addr_state of IA and ID have the lowest total amount of loans. 
+
+## Check for Zero-Variance Variables 
+```{r variance}
+#Check for zero-variance variables
+#categorical variables 
+loan.factor = loan.sql[,sapply(loan.sql, class)=='factor']
+loan.factor %>% purrr::map_int(~length(unique(.))) %>% sort() == 1
+
+#numerical variables
+loan.num = loan.sql[,sapply(loan.sql,is.numeric)]
+which(apply(loan.num,2,sd)==0)
+
+loan.sql <- dplyr::select(loan.sql,-c(policy_code,pymnt_plan,sub_grade,zip_code))
+#length(loan.sql)
+```
+policy_code has zero variance, pymnt_plan only have 10 obs in "y", sub_grade and zip_code are explained in grade and addr_state, respectively, by their definition. Hence, these four variables are dropped from the data set and there are 43 remaining variables.
+
+## Correlation Plot for Predictor Variables
+
+delinq_2yrs, acc_now_delinq and loan_status are dropped temporarily to look at the correlation between predictor variables.
+```{r remove response}
+loan.predictors <- dplyr::select(loan.sql,-c(delinq_2yrs,acc_now_delinq,loan_status))
+```
+
+### Continuous Variables
+```{r continuous}
+loan.num = loan.predictors[,sapply(loan.predictors, class)=='numeric']
+corr <- round(cor(loan.num),4)
+corr.plot <- melt(corr)
+gg.corr <- ggplot(corr.plot,aes(Var1,Var2,fill=value))+geom_tile()+theme(axis.text.x = element_text(angle=90,hjust = 1))+ggtitle("Correlation Plot for Continuous Variables")
+gg.corr
+```
+loan_amnt, funded_amnt, funded_amnt_inv and installment are strongly correlated with each other. total_pymnt, total_pymnt_inv and total_rec_int are also strongly correlated with each other. 
+
+### Categorical Variables 
+```{r categorical}
+loan.factor = loan.predictors[,sapply(loan.predictors, class)=='factor']
+char.list <- names(loan.factor)
+comb <- as.data.frame(t(combn(char.list,2)))
+p_value <- matrix(NA,nrow(comb),1)
+
+for (i in 1:nrow(comb)){
+  var1 <- as.character(comb$V1[i])
+  var2 <- as.character(comb$V2[i])
+  char1 <- loan.factor[,var1]
+  char2 <- loan.factor[,var2]
+  p <- chisq.test(char1,char2)$p.value
+  p_value[i,] <- p
+}
+comb$p.value <- p_value
+names(comb)[names(comb)=="V1"]<-"Variable1"
+names(comb)[names(comb)=="V2"]<-"Variable2"
+comb[order(comb$p.value),]
+```
+
+I concluded that all p-values are less than the 0.05 significance level, so we reject the null-hypothesis that all variables are independent of each other. I noticed that home_ownership against initial_list_status and emp_title against issue_d have the highest p-values of 2.363197e-294 and 5.855992e-270, respectively.
+
+**BMB: looking at correlations among categorical variables is reasonable, and chi-squared is a reasonable way to do it, but why bother with p-values here?**
+
+##  Define default variable
+
+```{r default}
+default_vars <- c("loan_status", "delinq_2yrs","acc_now_delinq")
+map(.x=loan.sql[,default_vars],.f=base::unique)
+table(as.factor(loan.sql$loan_status))
+defaulted <- c("Charged Off",
+               "Default",
+               "Does not meet the credit policy. Status:Charged Off",
+               "Late (16-30) days",
+               "Late (31-120) days")
+loan.sql <- (loan.sql 
+             %>% mutate(default = ifelse(loan.sql$loan_status %in% defaulted,1,0)))
+loan.sql<-dplyr::select(loan.sql,-"loan_status")
+```
+
+# Train and Testing Sets
+
+## Percentage Split
+
+The data set is split into training and test sets. Out of the 887,382  observations, 50 percent of them are randomly sampled to be used for the training set and the remaining 50 percent are used for the test set. I also checked if the levels for categorical variables in both sets are equivalent. I evaluated the proportions of not default and default observations in the test set and training set with approximately 94.67% and 5.31%, respectively.
+
+```{r train and test sets}
+#make the results reproducible 
+set.seed(400013847)
+ntot <- nrow(loan.sql)
+#set the training set
+#Take ~50% as training set
+train = sample(ntot,floor(0.50*ntot))
+#set the test set 
+test = (-train)
+#split the default data based on the training set 
+loan.train <- loan.sql[train,]
+#split the default data based on the test set
+loan.test <- loan.sql[test,]
+
+prop.table(table(loan.train$default))*100
+prop.table(table(loan.test$default))*100
+```
+
+3.2 Check test and training sets have the same number of levels 
+```{r levels}
+loan.factor = loan.sql[,sapply(loan.sql, class)=='factor']
+lvl <- names(loan.factor)
+for (i in 1:length(lvl)){
+  list.test <- unique(sort(loan.test[,lvl[i]]))
+  list.train <- unique(sort(loan.train[,lvl[i]]))
+  if (identical(list.test,list.train)==FALSE){
+    print(paste0(lvl[i]," in test and training sets do not have the same level"))
+  }
+}
+#save training and test sets in csv
+#write.csv(loan.train,"/Users/carolphan/Desktop/STATS 4W03/lending-club-loan-data/loan.train.csv")
+#write.csv(loan.test,"/Users/carolphan/Desktop/STATS 4W03/lending-club-loan-data/loan.test.csv")
+
+#read saved training and test sets in csv
+#loan.train <- read.csv("/Users/carolphan/Desktop/STATS 4W03/lending-club-loan-data/loan.train.csv")
+#loan.test <- read.csv("/Users/carolphan/Desktop/STATS 4W03/lending-club-loan-data/loan.test.csv")
+#loan.train<-dplyr::select(loan.train,-"X")
+#loan.test<-dplyr::select(loan.test,-"X")
+```
+Hence, test and training sets have the same number of levels.
+
+4 Methodology
+The response variable is default with 0 as loan status of no default and 1 as loan status of default. delinq_2yrs and acc_now_delinq were omitted when the model was fitted because these variables are associated with delinquency. 
+4.1 Linear Model 
+The fastLm() function was used on the training set to fit a linear model with one predictor variable (grade) and a linear model with all predictor variables.
+```{r models}
+#fit the linear model 
+#length(loan.train1)
+#nrow(loan.train1)
+loan.train1 <- dplyr::select(loan.train,-c(delinq_2yrs,acc_now_delinq))
+#linear model with one predictor variable (grade)
+lm.train.1 <- fastLm(default~grade,data=loan.train1)
+#linear model with all predictor variables
+lm.train.full <- fastLm(default~.,data=loan.train1)
+summary(lm.train.1)
+summary(lm.train.full)
+```
+
+4.2 Univariate and Multivariate Logistic Regressions
+addr_state was omitted from the data set. The fast glm function did not help with the time effeciency, so I stuck with the glm() function. The glm() function was used on the training set to fit a univariate logistic regression with grade as the predictor variable and a multivariate logistic regression with all predictors.
+```{r}
+#loan.factor.train %>% purrr::map_int(~length(unique(.))) %>% sort()
+#loan.factor.train = loan.train1[,sapply(loan.train1, class)=='factor']
+loan.train1 <- dplyr::select(loan.train1,-addr_state)
+#loan.train1$default <- as.factor(loan.train1$default)
+set.seed(400013847)
+#univariate
+loan.log <- glm(default~grade,data=loan.train1,family = binomial("logit"))
+summary(loan.log)
+#Odd ratio
+exp(cbind(Odds.Ratio=coef(loan.log),confint.default(loan.log)))
+
+#multivariate
+loan.log.1 <- glm(default~.,data=loan.train1,family = binomial("logit"))
+summary(loan.log.1)
+```
+The results are extremely significant for both p-value and odds ratio (infinity). The 95% confidence interval is extremely high meaning the variables are dependent. However, the multivariate logistic regession for all predictor variables outputted a message "glm.fit: algorithm did not convergeglm.fit: fitted probabilities numerically 0 or 1 occurred". This means that predictors are not linearly-independent or one of the preditors is prefectly associated with the response variables. To solve this problem, I tried to manually looking at the predictor variables and omitted the variables that I think that are associated with each other. However, this did not solve the problem so Lasso and Ridge regression were used to fix this problem.
+
+4.3 Ridge Regression
+The glmnet() function was used to fit ridge regression with all predictor variables on the training set.
+```{r ridge}
+set.seed(400013847)
+#head(loan.train1,5)
+x <- model.matrix(default~., data = loan.train1)[,-1] #get a matrix of training set
+y <- loan.train1$default
+grid = 10^seq(10,-2,length = 100) #set the grid parameter for lambda
+ridgemodel = glmnet(x,y,alpha = 0,family = "binomial",lambda = grid) #alpha = 0 is ridge regression
+dim(coef(ridgemodel))
+#94 rows and 100 columns 
+ridgemodel$lambda[50]
+#coefficients when lambda = 11497.57
+coef(ridgemodel)[,50]
+sqrt(sum(coef(ridgemodel)[-1,50]^2))
+
+cv.ri = cv.glmnet(x,y,alpha = 0) #cross validation for ridge
+plot(cv.ri)
+best.ri = cv.ri$lambda.min #get the minimal lambda from cross validation
+best.ri
+```
+
+4.4 Lasso Regression
+The glmnet() function was used to fit ridge regression with all predictor variables on the training set.
+```{r}
+set.seed(400013847)
+lassomodel = glmnet(x,y,alpha=1, lambda=grid,family = "binomial") #create the model for lasso model
+plot(lassomodel)
+#cross validation for lasso
+cv.la = cv.glmnet(x,y,alpha = 1) 
+plot(cv.la)
+best.la = cv.la$lambda.min #get the minimal lambda from cross validation
+best.la
+```
+
+4.5 Random Forest 
+Random forest forces each split to consider only a subset of the predictors, so the one very strong predictor does not overcome other predictors. A random forest of classification tree was built with 6 variables and 5 trees. The randomForest package did not work well on the high dimensional data, so I used the ranger package for fast implement of random forest.
+
+```{r random forest}
+set.seed(400013847)
+loan.train1$default <- as.character(loan.train1$default)
+loan.train1$default <- as.factor(loan.train1$default)
+#rf.loans <- randomForest(default~.,data=loan.train1,mtry=6,importance=TRUE)
+rf.loans <- ranger(default~.,data=loan.train1,importance = "impurity", write.forest=TRUE, num.trees = 5)
+rf.loans
+#the fraction of missclassified samples 
+rf.loans$prediction.error
+#varianle importance
+ggplot(stack(rf.loans$variable.importance),aes(reorder(ind,values),values))+geom_col()+coord_flip()
+```
+I see that collection_recovery fee has the greatest impact in reducing MSE across the trees, followed by total_rec_prncp, total_pymnt and etc. 
+
+5 Compare Models
+I used accuracy, sensitivity and specificity that were calculated from the confusion matrix and MSE to determine which of the models give the best prediction. The confusion matrix was generated from each model to determine how many observations were correctly or uncorrectly classified.
+
+```{r test set}
+loan.test1 <- dplyr::select(loan.test,-c(delinq_2yrs,acc_now_delinq,addr_state))
+```
+
+```{r score}
+#confusion matrix and mse
+#UNIVARIATE LOGISTIC MODEL 
+#predict the probability that the customer will default, given grade
+set.seed(400013847)
+glm.probs <- predict(loan.log,loan.test1,type = "response")
+ntot.test<-nrow(loan.test1)
+glm.pred=rep(0,ntot.test)
+glm.pred[glm.probs>0.25]=1
+
+#confusion matrix 
+cm.glm <- table(glm.pred,loan.test1$default)
+cm.glm
+#accuracy
+mean(glm.pred==loan.test1$default)
+#sensitivity
+#sensitivity(cm.glm)
+#specificity
+#specificity(cm.glm)
+#mse
+mean((glm.pred-loan.test1$default)^2)
+
+#RIDGE
+x.test <- model.matrix(default~., data = loan.test1)[,-1] 
+#predict using the minimal lambda
+best.ri
+ri.probs = predict(ridgemodel,s=best.ri,newx= x.test,type="class")
+#confusion matrix 
+cm.ri <- table(ri.probs,loan.test1$default)
+cm.ri
+#accuracy 
+mean(ri.probs==loan.test1$default) #0.9722
+#sensitivity
+sensitivity(cm.ri) #0.9999
+#specificity
+specificity(cm.ri) #0.4805
+#mse
+ri.probs <- as.numeric(ri.probs)
+mean((ri.probs-loan.test1$default)^2) #0.0278
+
+#LASSO
+#predict using the minimal lambda
+best.la
+pred.la = predict(lassomodel,s = best.la, newx = x.test,type="class")
+#confusion matrix 
+cm.la <- table(pred.la,loan.test1$default)
+cm.la
+#accuracy 
+mean(pred.la==loan.test1$default) #0.9660
+#sensitivity
+sensitivity(cm.la) #0.9999976
+#specificity
+specificity(cm.ri) #0.4805
+#mse
+pred.la <- as.numeric(pred.la)
+mean((pred.la-loan.test1$default)^2) #0.0339
+
+#get a matrix of the data loan.sql
+loanmatrix = model.matrix(default~., data=loan.sql) 
+#fit the lasso model using the lambda values with the loanmatrix
+la.mo = glmnet(loangematrix,y,alpha=1,lambda=1)
+#the resulting coefficient estimates are sparse
+lasso.coef <- predict(la.mo,type = "coefficients",s=best.la)
+lasso.coef
+
+lasso.coef=predict(lassomodel,type ="coefficients",s=best.la)[1:50,] #fit the lasso model using the lambda values with the loanmatrix
+lasso.coef[lasso.coef!=0]
+
+#RANDOM FOREST CLASSIFICATION
+loan.test1$default <- as.character(loan.test1$default)
+loan.test1$default <- as.factor(loan.test1$default)
+
+pred.rf <- predict(rf.loans,data=loan.test1)
+#confusion matrix
+cm.rf<-table(pred.rf$predictions,loan.test1$default)
+cm.rf
+#accuracy
+mean(pred.rf$predictions==loan.test1$default) #0.9977
+#sensitivity 
+sensitivity(cm.rf) #0.9999
+#specificity 
+specificity(cm.rf) #0.9577
+#mse
+yhat.rf <- pred.rf$predictions
+yhat.rf <- as.character(yhat.rf)
+yhat.rf <- as.numeric(yhat.rf)
+loan.test1$default <- as.character(loan.test1$default)
+loan.test1$default <- as.numeric(loan.test1$default)
+mean((yhat.rf-loan.test1$default)^2) #The test set MSE is 0.0024
+```
+
+6 Conclusion 
+I did not worry about good customers, they are not harmful as bad customers and so, I can have
+less specificity and high sensitivity. From the above result, I can conclude that choose the Random Forest with
+highest accuracy, sensitivity and specificity rate as well as lowest mse. Also, Random Forest is the most time efficiency to run the model the ranger() function. 
+
+Next Step...
+I have tried hclust() function for emp_title and title but as I implemented more observations R crashed. A way to solve this may be dividing the data set into alphabetical emp_title/title subsets and run the hclust() on each subset then merge the results together and create another hclust() on the result. However, it was difficult to have a-z datasets. I did not get to use desc (description from the customers on why they need to borrow a loan) variable so the next step would be to do a sparse matrix on it. The default variable was used for this analysis but delinq_2yrs and acc_now_delinq can also be used as response variable, the next step is to fit models with more than one response variables. 
+
+
+**BMB: overall this looks very sensible and thoughtful. It would be good to put together a summary table with the MSE/sensitivity/specificity results all in one place**
